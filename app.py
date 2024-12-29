@@ -1,64 +1,84 @@
 from flask import Flask, request, jsonify
-import pandas as pd
 import pickle
+from googletrans import Translator
 
-# Load the trained model
-model_file = 'crop_prediction_model.pkl'
-encoders_file = 'encoders.pkl'
-try:
-    with open(model_file, 'rb') as f:
-        model = pickle.load(f)
-    with open(encoders_file, 'rb') as f:
-        encoders = pickle.load(f)
-    soil_encoder = encoders['soil_encoder']
-    crop_encoder = encoders['crop_encoder']
-    print("Model and encoders loaded successfully!")
-except Exception as e:
-    print(f"Error loading model or encoders: {e}")
-    exit(1)
+from rapidfuzz import fuzz
 
 # Initialize Flask app
 app = Flask(__name__)
 
+# Load the FAQ data
+faq_file = 'faq_data.pkl'
+try:
+    with open(faq_file, 'rb') as f:
+        faq_data = pickle.load(f)
+    print("FAQ data loaded successfully!")
+except Exception as e:
+    print(f"Error loading FAQ data: {e}")
+    exit(1)
+
+# Initialize translator
+translator = Translator()
+
+def translate_text(text, src_language, dest_language):
+    """Translate text between source and destination languages."""
+    try:
+        translated = translator.translate(text, src=src_language, dest=dest_language)
+        return translated.text
+    except TranslateError as e:
+        return f"Translation failed: {str(e)}"
+    except Exception as e:
+        return f"An unexpected error occurred during translation: {str(e)}"
+
+def find_answer(user_query, faq_data):
+    """Find the most relevant answer based on 70% similarity using fuzzy matching."""
+    best_match = None
+    highest_score = 0
+    threshold = 70  # Set threshold to 70%
+
+    for row in faq_data:
+        score = fuzz.partial_ratio(user_query.lower(), row['Question'].lower())
+        if score > highest_score and score >= threshold:
+            highest_score = score
+            best_match = row['Answer']
+
+    if best_match:
+        return best_match
+    return "Sorry, I couldn't find an answer to your query."
+
 @app.route('/')
 def index():
-    return "Welcome to the Crop Prediction API! Use /predict endpoint to predict the crop type."
+    return "Welcome to the Chatbot API! Use /chat endpoint to interact with the chatbot."
 
-@app.route('/predict', methods=['POST'])
-def predict():
+@app.route('/chat', methods=['POST'])
+def chat():
     try:
-        # Extract input features from form data
-        N = request.form.get('N', type=float)
-        P = request.form.get('P', type=float)
-        K = request.form.get('K', type=float)
-        pH = request.form.get('pH', type=float)
-        soil_type = request.form.get('Soil_type')
+        # Extract user input and language from form data
+        user_query = request.form.get('query')
+        user_language = request.form.get('language', 'en')
 
         # Validate inputs
-        if N is None or P is None or K is None or pH is None or soil_type is None:
-            return jsonify({"error": "All inputs (N, P, K, pH, Soil_type) are required."}), 400
+        if not user_query:
+            return jsonify({"error": "Query is required."}), 400
 
-        # Encode soil type
-        try:
-            soil_type_encoded = soil_encoder.transform([soil_type])[0]
-        except ValueError:
-            return jsonify({"error": "Invalid Soil_type provided."}), 400
+        # Translate user query to English
+        query_in_english = translate_text(user_query, user_language, 'en')
+        if "Translation failed" in query_in_english or "An unexpected error occurred" in query_in_english:
+            return jsonify({"error": query_in_english}), 500
 
-        # Prepare input for prediction
-        input_features = pd.DataFrame([[N, P, K, pH, soil_type_encoded]], columns=['N', 'P', 'K', 'pH', 'Soil_type'])
+        # Find the answer in the FAQ data
+        answer_in_english = find_answer(query_in_english, faq_data)
 
-        # Perform prediction
-        predicted_crop_numeric = model.predict(input_features)[0]
-        predicted_crop = crop_encoder.inverse_transform([predicted_crop_numeric])[0]
+        # Translate the answer back to the user's language
+        answer_in_user_language = translate_text(answer_in_english, 'en', user_language)
+        if "Translation failed" in answer_in_user_language or "An unexpected error occurred" in answer_in_user_language:
+            return jsonify({"error": answer_in_user_language}), 500
 
-        # Return prediction result
+        # Return the response
         return jsonify({
-            "N": N,
-            "P": P,
-            "K": K,
-            "pH": pH,
-            "Soil_type": soil_type,
-            "PredictedCrop": predicted_crop
+            "query": user_query,
+            "language": user_language,
+            "answer": answer_in_user_language
         })
 
     except Exception as e:
