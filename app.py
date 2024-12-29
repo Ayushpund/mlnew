@@ -25,8 +25,7 @@ def translate_text(text, src_language, dest_language):
     try:
         translated = translator.translate(text, src=src_language, dest=dest_language)
         return translated.text
-    except TranslateError as e:
-        return f"Translation failed: {str(e)}"
+
     except Exception as e:
         return f"An unexpected error occurred during translation: {str(e)}"
 
